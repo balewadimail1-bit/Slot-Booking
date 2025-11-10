@@ -1,0 +1,5 @@
+{
+  "name": "Slot Booking App",
+  "description": "A web application for booking appointment slots, built with React and Tailwind CSS, designed to integrate with a Google Apps Script backend.",
+  "requestFramePermissions": []
+}

@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="mr">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>अमोल बालवडकर जनसंपर्क कार्यालय - स्लॉट बुकिंग</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500;700&family=Poppins:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+      body {
+        font-family: 'Noto Sans Devanagari', 'Poppins', sans-serif;
+      }
+    </style>
+    <!-- React Libraries -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <!-- Babel to transpile JSX in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+  <body class="bg-slate-100">
+    <div id="root"></div>
+
+    <script type="text/babel">
+      // All application code is bundled here.
+
+      // --- From utils/formatTime.ts ---
+      const formatTime12Hour = (time24) => {
+        if (!time24 || !time24.includes(':')) {
+          return '';
+        }
+        const [hoursStr, minutes] = time24.split(':');
+        const hours = parseInt(hoursStr, 10);
+        if (isNaN(hours)) {
+          return '';
+        }
+        const ampm = hours >= 12 ? 'PM' : 'AM';
+        let hours12 = hours % 12;
+        hours12 = hours12 ? hours12 : 12;
+        const hours12Str = hours12 < 10 ? `0${hours12}` : String(hours12);
+        return `${hours12Str}:${minutes} ${ampm}`;
+      };
+
+      // --- From utils/generateSlots.ts ---
+      const generateAllSlots = () => {
+        const slots = [];
+        const startTime = 10 * 60;
+        const endTime = 16 * 60 + 30;
+        const interval = 15;
+        const lunchStart = 13 * 60;
+        const lunchEnd = 14 * 60;
+        for (let minutes = startTime; minutes <= endTime; minutes += interval) {
+          const hour = Math.floor(minutes / 60);
+          const minute = minutes % 60;
+          const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+          const isLunch = minutes >= lunchStart && minutes < lunchEnd;
+          slots.push({ time, lunch: isLunch });
+        }
+        return slots;
+      };
+
+      // --- From services/api.ts ---
+      const SCRIPT_URL = `https://script.google.com/macros/s/AKfycbw6BZjhxH2S9N_PW3fYDycFrZB8n5-ai0QFMfdMWRnojIiBrPpI-CQ2YAVj9TV0pzfAfA/exec`;
+      let isGoogleScriptEnvironment = false;
+      try {
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+          isGoogleScriptEnvironment = true;
+        }
+      } catch (e) {
+        isGoogleScriptEnvironment = false;
+        console.warn("Could not accurately check for Google Script environment, defaulting to 'fetch'. Error:", e);
+      }
+
+      const runGoogleScript = (functionName, ...args) => {
+        return new Promise((resolve, reject) => {
+          google.script.run
+            .withSuccessHandler(resolve)
+            .withFailureHandler(reject)
+            [functionName](...args);
+        });
+      };
+
+      const runGoogleScriptWithFetch = async (functionName, ...args) => {
+        try {
+          const urlWithCacheBuster = `${SCRIPT_URL}?v=${new Date().getTime()}`;
+          const response = await fetch(urlWithCacheBuster, {
+            method: 'POST',
+            mode: 'cors',
+            redirect: 'follow',
+            headers: {
+              'Content-Type': 'text/plain;charset=utf-8',
+            },
+            body: JSON.stringify({ functionName, args }),
+          });
+          if (!response.ok) {
+              throw new Error(`Network response was not ok: ${response.statusText}`);
+          }
+          const result = await response.json();
+          if (result.error) {
+            throw new Error(result.error);
+          }
+          return result.data;
+        } catch (error) {
+          console.error(`Error fetching from Google Apps Script '${functionName}':`, error);
+          if (error instanceof TypeError && error.message === 'Failed to fetch') {
+            throw new Error('सर्व्हरशी कनेक्ट करण्यात अयशस्वी. कृपया तुमची इंटरनेट कनेक्टिव्हिटी तपासा आणि पुन्हा प्रयत्न करा.');
+          }
+          throw error;
+        }
+      };
+      
+      const getSlotsStatus = async (office) => {
+        if (isGoogleScriptEnvironment) {
+          return runGoogleScript('getSlotsStatus', office);
+        }
+        return runGoogleScriptWithFetch('getSlotsStatus', office);
+      };
+
+      const submitBooking = async (formData) => {
+        if (isGoogleScriptEnvironment) {
+          return runGoogleScript('submitForm', formData);
+        }
+        return runGoogleScriptWithFetch('submitForm', formData);
+      };
+
+
+      // --- From components/Loader.tsx ---
+      const Loader = () => {
+        return (
+          <svg 
+            className="animate-spin h-5 w-5 text-white" 
+            xmlns="http://www.w3.org/2000/svg" 
+            fill="none" 
+            viewBox="0 0 24 24"
+          >
+            <circle 
+              className="opacity-25" 
+              cx="12" 
+              cy="12" 
+              r="10" 
+              stroke="currentColor" 
+              strokeWidth="4"
+            ></circle>
+            <path 
+              className="opacity-75" 
+              fill="currentColor" 
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+            ></path>
+          </svg>
+        );
+      };
+
+      // --- From components/Header.tsx ---
+      const Header = () => {
+        return (
+          <header className="bg-slate-800 shadow-md">
+            <div className="container mx-auto px-4 py-5 text-center">
+              <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-wide">
+                अमोल बालवडकर जनसंपर्क कार्यालय
+              </h1>
+              <p className="text-slate-300 mt-1 text-lg">
+                आधार कार्ड स्लॉट बुकिंग प्रणाली
+              </p>
+            </div>
+          </header>
+        );
+      };
+      
+      // --- From components/SlotCard.tsx ---
+      const SlotCard = ({ slot, onClick }) => {
+        const getCardClasses = () => {
+          if (slot.booked) return 'bg-red-100 text-red-700 cursor-not-allowed';
+          if (slot.lunch) return 'bg-yellow-100 text-yellow-800 cursor-not-allowed';
+          return 'bg-green-100 text-green-800 hover:bg-green-200 hover:shadow-lg cursor-pointer';
+        };
+        const getStatusText = () => {
+          if (slot.booked) return 'बुक झाला';
+          if (slot.lunch) return 'लंच ब्रेक';
+          return 'उपलब्ध';
+        };
+        return (
+          <div
+            onClick={() => onClick(slot)}
+            className={`rounded-lg p-3 text-center shadow-md transition-all duration-300 ${getCardClasses()}`}
+          >
+            <p className="font-bold text-xl">{formatTime12Hour(slot.time)}</p>
+            <p className="text-sm font-medium">{getStatusText()}</p>
+          </div>
+        );
+      };
+
+      // --- From components/BookingModal.tsx ---
+      const InputField = ({ id, label, type = 'text', value, onChange, required = false, error }) => (
+        <div>
+          <label htmlFor={id} className="block text-sm font-medium text-slate-700">
+            {label}
+          </label>
+          <input
+            type={type}
+            id={id}
+            name={id}
+            value={value}
+            onChange={onChange}
+            required={required}
+            className={`mt-1 block w-full px-3 py-2 bg-white border rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-slate-500 focus:border-slate-500 sm:text-sm ${error ? 'border-red-500' : 'border-slate-300'}`}
+            aria-invalid={!!error}
+            aria-describedby={error ? `${id}-error` : undefined}
+          />
+          {error && <p id={`${id}-error`} className="mt-1 text-xs text-red-600">{error}</p>}
+        </div>
+      );
+
+      const BookingModal = ({ slotTime, onClose, onSubmit, isSubmitting, error, successData, office }) => {
+        const { useState } = React;
+        const [formData, setFormData] = useState({
+          name: '', mobile: '', aadhaar: '', flat: '', society: '', area: '',
+        });
+        const [errors, setErrors] = useState({});
+
+        const handleChange = (e) => {
+          const { name, value } = e.target;
+          setFormData(prev => ({ ...prev, [name]: value }));
+          if (errors[name]) {
+            setErrors(prev => {
+              const newErrors = { ...prev };
+              delete newErrors[name];
+              return newErrors;
+            });
+          }
+        };
+
+        const validateForm = () => {
+          const newErrors = {};
+          if (!formData.name.trim()) newErrors.name = "कृपया पूर्ण नाव प्रविष्ट करा.";
+          if (!/^\d{10}$/.test(formData.mobile)) {
+              newErrors.mobile = 'कृपया १० अंकी वैध मोबाइल नंबर प्रविष्ट करा.';
+          } else if (!/^[6-9]/.test(formData.mobile)) {
+              newErrors.mobile = 'मोबाइल नंबर 6, 7, 8, किंवा 9 ने सुरू झाला पाहिजे.';
+          }
+          if (!formData.flat.trim()) newErrors.flat = "कृपया फ्लॅट नं / घर नं प्रविष्ट करा.";
+          if (!formData.society.trim()) newErrors.society = "कृपया सोसायटी / बिल्डिंगचे नाव प्रविष्ट करा.";
+          if (!formData.area.trim()) newErrors.area = "कृपया परिसर प्रविष्ट करा.";
+          
+          setErrors(newErrors);
+          return Object.keys(newErrors).length === 0;
+        };
+
+        const handleSubmit = (e) => {
+          e.preventDefault();
+          if (validateForm()) {
+            onSubmit(formData);
+          }
+        };
+
+        if (successData) {
+            const { formData: successfulFormData, slot } = successData;
+            const formattedTime = formatTime12Hour(slot.time);
+            const bookingDate = new Date().toLocaleDateString('mr-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+
+            const handleSendWhatsApp = () => {
+                const rawMessage = `*आधार कार्ड स्लॉट बुकिंग यशस्वी!*\n\n*नाव:* ${successfulFormData.name}\n*वेळ:* ${formattedTime}\n*तारीख:* ${bookingDate}\n*कार्यालय:* ${office === 'Balewadi' ? 'बालेवाडी' : 'बाणेर'}\n\nधन्यवाद!`;
+                const encodedMessage = encodeURIComponent(rawMessage);
+                const whatsappUrl = `https://api.whatsapp.com/send?phone=91${successfulFormData.mobile}&text=${encodedMessage}`;
+                window.open(whatsappUrl, '_blank');
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50 p-4 animate-fade-in" onClick={onClose}>
+                    <div className="bg-slate-50 rounded-lg shadow-2xl w-full max-w-lg relative animate-slide-up text-center p-6 sm:p-8" onClick={e => e.stopPropagation()}>
+                        <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-green-100">
+                           <svg className="h-10 w-10 text-green-600" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" aria-hidden="true">
+                             <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                           </svg>
+                        </div>
+                        <h2 className="text-2xl font-bold text-slate-800 mt-5">बुकिंग यशस्वी!</h2>
+                        <p className="text-slate-600 mt-2">तुमचा स्लॉट यशस्वीरित्या बुक झाला आहे.</p>
+                        
+                        <div className="text-left bg-slate-100 p-4 rounded-lg mt-6 space-y-2 border border-slate-200">
+                            <p><strong>नाव:</strong> {successfulFormData.name}</p>
+                            <p><strong>वेळ:</strong> {formattedTime}</p>
+                            <p><strong>तारीख:</strong> {bookingDate}</p>
+                            <p><strong>कार्यालय:</strong> {office === 'Balewadi' ? 'बालेवाडी' : 'बाणेर'}</p>
+                        </div>
+
+                        <div className="mt-8 flex flex-col sm:flex-row gap-4 justify-center">
+                             <button
+                                onClick={handleSendWhatsApp}
+                                className="w-full sm:w-auto inline-flex justify-center items-center gap-2 px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors"
+                              >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" /></svg>
+                                WhatsApp वर पाठवा
+                              </button>
+                              <button
+                                onClick={onClose}
+                                className="w-full sm:w-auto inline-flex justify-center items-center px-6 py-3 border border-slate-300 text-base font-medium rounded-md shadow-sm text-slate-700 bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-500 transition-colors"
+                              >
+                                बंद करा
+                              </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+
+        return (
+          <div className="fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50 p-4 animate-fade-in" onClick={onClose}>
+            <div className="bg-slate-50 rounded-lg shadow-2xl w-full max-w-lg relative animate-slide-up" onClick={e => e.stopPropagation()}>
+              <div className="flex justify-between items-center p-5 border-b border-slate-200">
+                <h2 className="text-xl font-bold text-slate-800">
+                  स्लॉट बुकिंग: <span className="text-slate-600">{formatTime12Hour(slotTime)}</span>
+                </h2>
+                <button onClick={onClose} disabled={isSubmitting} className="text-slate-400 hover:text-slate-600 transition-colors disabled:opacity-50">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <form onSubmit={handleSubmit} className="p-6" noValidate>
+                <div className="space-y-4">
+                  <InputField id="name" label="पूर्ण नाव" value={formData.name} onChange={handleChange} required error={errors.name}/>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <InputField id="mobile" label="मोबाइल नंबर" type="tel" value={formData.mobile} onChange={handleChange} required error={errors.mobile}/>
+                      <InputField id="aadhaar" label="आधार क्रमांक (ऐच्छिक)" value={formData.aadhaar} onChange={handleChange} />
+                  </div>
+                  <InputField id="flat" label="फ्लॅट नं / घर नं" value={formData.flat} onChange={handleChange} required error={errors.flat}/>
+                  <InputField id="society" label="सोसायटी / बिल्डिंगचे नाव" value={formData.society} onChange={handleChange} required error={errors.society}/>
+                  <InputField id="area" label="परिसर" value={formData.area} onChange={handleChange} required error={errors.area}/>
+                </div>
+
+                {error && (
+                  <div className="mt-4 text-center text-red-600 bg-red-100 p-3 rounded-md">
+                    {error}
+                  </div>
+                )}
+
+                <div className="mt-6 flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className="w-full sm:w-auto inline-flex justify-center items-center gap-2 px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-slate-700 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-500 disabled:bg-slate-400 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {isSubmitting ? <Loader /> : 'स्लॉट बुक करा'}
+                  </button>
+                </div>
+              </form>
+            </div>
+             <style>{`
+              @keyframes fade-in {
+                from { opacity: 0; }
+                to { opacity: 1; }
+              }
+              .animate-fade-in { animation: fade-in 0.3s ease-out forwards; }
+              
+              @keyframes slide-up {
+                from { transform: translateY(20px); opacity: 0; }
+                to { transform: translateY(0); opacity: 1; }
+              }
+              .animate-slide-up { animation: slide-up 0.4s ease-out forwards; }
+            `}</style>
+          </div>
+        );
+      };
+      
+      // --- From App.tsx ---
+      const App = () => {
+        const { useState, useEffect, useCallback, Fragment } = React;
+
+        const [selectedOffice, setSelectedOffice] = useState('Balewadi');
+        const [slotStatus, setSlotStatus] = useState(null);
+        const [loading, setLoading] = useState(true);
+        const [error, setError] = useState(null);
+        const [selectedSlot, setSelectedSlot] = useState(null);
+        const [isModalOpen, setIsModalOpen] = useState(false);
+        const [formSubmitting, setFormSubmitting] = useState(false);
+        const [formError, setFormError] = useState(null);
+        const [bookingSuccessData, setBookingSuccessData] = useState(null);
+
+        const fetchStatus = useCallback(async (office) => {
+          setLoading(true);
+          setError(null);
+          setSlotStatus(null);
+          try {
+            const data = await getSlotsStatus(office);
+            if (data.status === 'closed') {
+              setSlotStatus(data);
+            } else {
+              const allSlots = generateAllSlots();
+              const bookedTimes = new Set(data.bookedSlots);
+              const updatedSlots = allSlots.map(slot => ({
+                ...slot,
+                booked: bookedTimes.has(slot.time),
+              }));
+              setSlotStatus({
+                status: 'open',
+                slots: updatedSlots,
+              });
+            }
+          } catch (err) {
+            setError(err?.message || "स्लॉट माहिती लोड करण्यात अयशस्वी. कृपया पृष्ठ रीफ्रेश करा.");
+            console.error(err);
+          } finally {
+            setLoading(false);
+          }
+        }, []);
+
+        useEffect(() => {
+          fetchStatus(selectedOffice);
+        }, [selectedOffice, fetchStatus]);
+
+        const handleSlotClick = (slot) => {
+          if (slot.booked || slot.lunch) return;
+          setSelectedSlot(slot);
+          setIsModalOpen(true);
+          setFormError(null);
+        };
+
+        const handleCloseModal = () => {
+          if (formSubmitting) return;
+          setIsModalOpen(false);
+          setSelectedSlot(null);
+          setBookingSuccessData(null);
+        };
+
+        const handleFormSubmit = async (formData) => {
+          if (!selectedSlot) return;
+          setFormSubmitting(true);
+          setFormError(null);
+          try {
+            const fullFormData = { ...formData, slot: selectedSlot.time, office: selectedOffice };
+            await submitBooking(fullFormData);
+
+            if (slotStatus?.status === 'open') {
+              const newSlots = slotStatus.slots.map(s =>
+                s.time === selectedSlot.time ? { ...s, booked: true } : s
+              );
+              setSlotStatus({ ...slotStatus, slots: newSlots });
+            }
+            
+            setBookingSuccessData({ formData, slot: selectedSlot });
+            setFormSubmitting(false);
+
+          } catch (err) {
+            const errorMessage = err?.message || "एक अनपेक्षित त्रटी आली. कृपया पुन्हा प्रयत्न करा.";
+            setFormError(errorMessage);
+            setFormSubmitting(false);
+          }
+        };
+
+        const handleOfficeChange = (e) => {
+          setSelectedOffice(e.target.value);
+        };
+        
+        const todayDate = new Date().toLocaleDateString('mr-IN', {
+          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+        });
+
+        const renderContent = () => {
+          if (loading) {
+            return <div className="flex justify-center items-center h-64"><Loader /></div>;
+          }
+          if (error) {
+            return (
+                <div className="text-center text-red-600 bg-red-100 p-4 rounded-lg whitespace-pre-wrap">
+                    {error}
+                </div>
+            );
+          }
+          if (slotStatus?.status === 'closed') {
+            return (
+              <div className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-6 rounded-lg shadow-md text-center">
+                <p className="font-bold text-2xl">आज कार्यालय बंद आहे</p>
+                <p className="mt-2 text-lg">{slotStatus.reason}</p>
+              </div>
+            );
+          }
+          if (slotStatus?.status === 'open') {
+            const firstLunchIndex = slotStatus.slots.findIndex(slot => slot.lunch);
+            return (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                {slotStatus.slots.map((slot, index) => (
+                  <Fragment key={slot.time}>
+                    {index === firstLunchIndex && firstLunchIndex !== -1 && (
+                      <div className="col-span-full text-center my-2">
+                        <div className="inline-block bg-yellow-100 text-yellow-800 font-semibold px-6 py-2 rounded-full shadow-sm">
+                          लंच ब्रेक (दुपारी १:०० ते २:००)
+                        </div>
+                      </div>
+                    )}
+                    <SlotCard slot={slot} onClick={handleSlotClick} />
+                  </Fragment>
+                ))}
+              </div>
+            );
+          }
+          return null;
+        };
+
+        return (
+          <div className="min-h-screen">
+            <Header />
+            <main className="container mx-auto p-4 md:p-8">
+              <div className="bg-white rounded-xl shadow-lg p-6 mb-8">
+                  <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+                      <div>
+                          <h2 className="text-2xl font-bold text-slate-800">आजचे स्लॉट बुकिंग ({selectedOffice === 'Balewadi' ? 'बालेवाडी' : 'बाणेर'})</h2>
+                          <p className="text-slate-600 text-lg">{todayDate}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label htmlFor="office-select" className="sr-only">कार्यालय निवडा</label>
+                        <select
+                          id="office-select"
+                          value={selectedOffice}
+                          onChange={handleOfficeChange}
+                          disabled={loading}
+                          className="w-full sm:w-auto bg-slate-100 border border-slate-300 text-slate-800 font-semibold rounded-lg px-4 py-2 h-10 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-500 transition-colors"
+                        >
+                          <option value="Balewadi">बालेवाडी कार्यालय</option>
+                          <option value="Baner">बाणेर कार्यालय</option>
+                        </select>
+                        <button
+                          onClick={() => fetchStatus(selectedOffice)}
+                          disabled={loading}
+                          className="h-10 w-10 flex-shrink-0 flex items-center justify-center border border-slate-300 text-slate-700 font-semibold rounded-lg hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          aria-label="Refresh slots"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 110 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
+                          </svg>
+                        </button>
+                      </div>
+                  </div>
+              </div>
+
+              <div className="bg-blue-100 border-l-4 border-blue-500 text-blue-800 p-4 mb-8 rounded-lg shadow-md" role="alert">
+                <p className="font-bold text-lg">महत्वाची सूचना</p>
+                <p className="mt-1">आधार कार्ड साठी लागणाऱ्या कागदपत्रासाठी खाली दिलेल्या मोबाईल नंबरवर संपर्क करा: <strong className="font-semibold">9028790999</strong></p>
+              </div>
+              
+              {renderContent()}
+            </main>
+            {isModalOpen && selectedSlot && (
+              <BookingModal
+                slotTime={selectedSlot.time}
+                onClose={handleCloseModal}
+                onSubmit={handleFormSubmit}
+                isSubmitting={formSubmitting}
+                error={formError}
+                successData={bookingSuccessData}
+                office={selectedOffice}
+              />
+            )}
+          </div>
+        );
+      };
+
+      // --- From index.tsx ---
+      const rootElement = document.getElementById('root');
+      if (!rootElement) {
+        throw new Error("Could not find root element to mount to");
+      }
+      const root = ReactDOM.createRoot(rootElement);
+      root.render(
+        <React.StrictMode>
+          <App />
+        </React.StrictMode>
+      );
+
+    </script>
+  </body>
+</html>
